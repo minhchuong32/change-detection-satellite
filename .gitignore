@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# PyTorch
+*.pth
+*.pt
+checkpoints/
+
+# Data
+data/
+*.tif
+*.tiff
+*.png
+*.jpg
+*.jpeg
+
+# Logs
+logs/
+*.log
+runs/
+tensorboard/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights (trừ best_model.pth nếu muốn commit)
+# best_model.pth
+
+# Predictions
+predictions/
+results/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Docker
+.dockerignore
