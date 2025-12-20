@@ -19,20 +19,24 @@ Hệ thống so sánh 3 kiến trúc Deep Learning cho bài toán phát hiện t
 ## 🎯 Tính năng
 
 ✅ **3 Model Architectures:**
+
 - Siamese Pure (CNN thuần túy)
 - Siamese + MobileNetV2 (Transfer Learning)
 - EfficientNet-B0 + U-Net (State-of-the-art)
 
 ✅ **So sánh Raw vs Processed Data:**
+
 - Raw: LEVIR-CD+ original
 - Processed: Đã qua speckle filtering, alignment, normalization
 
 ✅ **Real-time Inference:**
+
 - Upload 2 ảnh SAR (before/after)
 - Điều chỉnh confidence threshold
 - Xem heatmap + overlay + metrics
 
 ✅ **Comprehensive Metrics:**
+
 - IoU, F1-Score, Precision, Recall
 - Biểu đồ so sánh Raw vs Processed
 - Bảng so sánh 6 variants
@@ -41,14 +45,14 @@ Hệ thống so sánh 3 kiến trúc Deep Learning cho bài toán phát hiện t
 
 ## 📊 Kết quả
 
-| Model | Data Type | IoU | F1 | Precision | Recall |
-|-------|-----------|-----|----|-----------| -------|
+| Model                  | Data Type | IoU       | F1        | Precision | Recall    |
+| ---------------------- | --------- | --------- | --------- | --------- | --------- |
 | **EfficientNet U-Net** | Processed | **0.856** | **0.908** | **0.916** | **0.901** |
-| EfficientNet U-Net | Raw | 0.781 | 0.849 | 0.861 | 0.837 |
-| MobileNetV2 | Processed | 0.834 | 0.892 | 0.901 | 0.883 |
-| MobileNetV2 | Raw | 0.756 | 0.831 | 0.842 | 0.820 |
-| Siamese Pure | Processed | 0.812 | 0.876 | 0.889 | 0.864 |
-| Siamese Pure | Raw | 0.723 | 0.802 | 0.815 | 0.789 |
+| EfficientNet U-Net     | Raw       | 0.781     | 0.849     | 0.861     | 0.837     |
+| MobileNetV2            | Processed | 0.834     | 0.892     | 0.901     | 0.883     |
+| MobileNetV2            | Raw       | 0.756     | 0.831     | 0.842     | 0.820     |
+| Siamese Pure           | Processed | 0.812     | 0.876     | 0.889     | 0.864     |
+| Siamese Pure           | Raw       | 0.723     | 0.802     | 0.815     | 0.789     |
 
 **🏆 Best Model:** EfficientNet-B0 + U-Net (Processed) - F1 Score: 0.908
 
@@ -57,12 +61,14 @@ Hệ thống so sánh 3 kiến trúc Deep Learning cho bài toán phát hiện t
 ## 🗂️ Datasets
 
 ### Raw Dataset
+
 - **Source:** [LEVIR-CD+](https://www.kaggle.com/datasets/mdrifaturrahman33/levir-cd-change-detection)
 - **Size:** 10,192 image pairs (1024×1024)
 - **Coverage:** Texas, USA (2002-2020)
 - **Change types:** Construction, demolition, expansion
 
 ### Processed Dataset
+
 - **Source:** [Satellite Change Detection](https://www.kaggle.com/datasets/nguynthanhbnhminh/satellite-dataset-for-change-detection)
 - **Preprocessing:**
   - Speckle filtering (Lee, Frost, Median)

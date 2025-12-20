@@ -1,5 +1,5 @@
 {
-  "Siamese Pure (Thùy)": {
+  "Siamese Pure": {
     "raw": {
       "loss": 0.245,
       "iou": 0.723,
@@ -15,7 +15,7 @@
       "recall": 0.864
     }
   },
-  "Siamese + MobileNetV2 (BiMi)": {
+  "Siamese + MobileNetV2": {
     "raw": {
       "loss": 0.221,
       "iou": 0.756,
@@ -31,7 +31,7 @@
       "recall": 0.883
     }
   },
-  "EfficientNet-B0 + U-Net (Chương)": {
+  "EfficientNet-B0 + U-Net": {
     "raw": {
       "loss": 0.203,
       "iou": 0.781,

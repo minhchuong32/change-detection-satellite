@@ -1,13 +1,28 @@
-gradio==4.44.1
+# Core Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
 
-huggingface_hub==0.26.0
-torch==2.1.0
-torchvision==0.16.0
-timm==0.9.12
-opencv-python-headless==4.8.0.76
-numpy==1.24.4
-Pillow==10.0.1
-matplotlib==3.7.3
-tqdm==4.65.2
-scipy==1.11.4
-    
+# Model Zoo
+timm>=0.9.0
+
+# Computer Vision
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Data Processing
+numpy>=1.24.0
+scipy>=1.11.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Web Interface
+gradio>=4.0.0
+
+# Utilities
+tqdm>=4.66.0
+pathlib>=1.0.1
+
+# Optional: For development
+# jupyter>=1.0.0
+# ipywidgets>=8.1.0

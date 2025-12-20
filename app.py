@@ -10,11 +10,176 @@ import matplotlib.pyplot as plt
 import io
 import os
 import shutil
+import traceback
 
-# ==================== IMPORT MODELS FROM TRAINING FOLDER ====================
-from training.siamese_pure import SiamesePure
-from training.siamese_mobilenet import SiameseMobileNetV2
-from training.siamese_efficientnet import SiameseEfficientNetUNet
+
+# ==================== MODEL DEFINITIONS  ====================
+class DoubleConv(nn.Module):
+    def __init__(self, i, o):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(i, o, 3, 1, 1),
+            nn.BatchNorm2d(o),
+            nn.ReLU(),
+            nn.Conv2d(o, o, 3, 1, 1),
+            nn.BatchNorm2d(o),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_c, out_c):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_c, out_c, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_c, out_c, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+# --- Siamese Pure ---
+class Encoder_Thuy(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.c1, self.c2, self.c3 = (
+            DoubleConv(3, 64),
+            DoubleConv(64, 128),
+            DoubleConv(128, 256),
+        )
+        self.pool = nn.MaxPool2d(2)
+
+    def forward(self, x):
+        f1 = self.c1(x)
+        f2 = self.c2(self.pool(f1))
+        f3 = self.c3(self.pool(f2))
+        return [f1, f2, f3]
+
+
+class Decoder_Thuy(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.up1 = nn.ConvTranspose2d(256, 128, 2, 2)
+        self.c1 = DoubleConv(256, 128)
+        self.up2 = nn.ConvTranspose2d(128, 64, 2, 2)
+        self.c2 = DoubleConv(128, 64)
+        self.out = nn.Conv2d(64, 1, 1)
+
+    def forward(self, f):
+        f1, f2, f3 = f
+        x = self.c1(torch.cat([self.up1(f3), f2], 1))
+        x = self.c2(torch.cat([self.up2(x), f1], 1))
+        return self.out(x)
+
+
+class SiamesePure(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.enc, self.dec = Encoder_Thuy(), Decoder_Thuy()
+
+    def forward(self, a, b):
+        fa, fb = self.enc(a), self.enc(b)
+        return self.dec([torch.abs(x - y) for x, y in zip(fa, fb)])
+
+
+# --- SIAMESE MOBILENET (BIMI) ---
+class SiameseMobileNetV2(nn.Module):
+    def __init__(self):
+        super().__init__()
+        import torchvision.models as models
+
+        # Sửa lại để không bị lỗi Hub
+        base = models.mobilenet_v2(weights=None)
+        self.base_layers = base.features
+        self.up1 = nn.ConvTranspose2d(1280, 96, 2, stride=2)
+        self.conv1 = ConvBlock(96 + 96, 96)
+        self.up2 = nn.ConvTranspose2d(96, 32, 2, stride=2)
+        self.conv2 = ConvBlock(32 + 32, 32)
+        self.up3 = nn.ConvTranspose2d(32, 24, 2, stride=2)
+        self.conv3 = ConvBlock(24 + 24, 24)
+        self.up4 = nn.ConvTranspose2d(24, 16, 2, stride=2)
+        self.conv4 = ConvBlock(16 + 16, 16)
+        self.final_up = nn.ConvTranspose2d(16, 16, 2, stride=2)
+        self.final_conv = nn.Conv2d(16, 1, 1)
+
+    def forward_one(self, x):
+        x1 = self.base_layers[:2](x)
+        x2 = self.base_layers[2:4](x1)
+        x3 = self.base_layers[4:7](x2)
+        x4 = self.base_layers[7:14](x3)
+        x5 = self.base_layers[14:](x4)
+        return [x1, x2, x3, x4, x5]
+
+    def forward(self, imgA, imgB):
+        fA, fB = self.forward_one(imgA), self.forward_one(imgB)
+        d1, d2, d3, d4, d5 = [torch.abs(x - y) for x, y in zip(fA, fB)]
+        c1 = self.conv1(torch.cat([self.up1(d5), d4], dim=1))
+        c2 = self.conv2(torch.cat([self.up2(c1), d3], dim=1))
+        c3 = self.conv3(torch.cat([self.up3(c2), d2], dim=1))
+        c4 = self.conv4(torch.cat([self.up4(c3), d1], dim=1))
+        return self.final_conv(self.final_up(c4))
+
+
+# --- EFFICIENTNET UNET (CHƯƠNG) ---
+class EfficientNetEncoder(nn.Module):
+    def __init__(self, pretrained=False):
+        super().__init__()
+        self.backbone = timm.create_model(
+            "efficientnet_b0",
+            pretrained=pretrained,
+            features_only=True,
+            output_stride=32,
+        )
+
+    def forward(self, x):
+        f = self.backbone(x)
+        return [f[1], f[2], f[3], f[4]]
+
+
+class UNetDecoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        ch = [24, 40, 112, 320]
+        self.bottleneck_conv = DoubleConv(ch[3], 256)
+        self.up1, self.c1 = nn.ConvTranspose2d(256, 128, 2, 2), DoubleConv(
+            128 + ch[2], 128
+        )
+        self.up2, self.c2 = nn.ConvTranspose2d(128, 64, 2, 2), DoubleConv(
+            64 + ch[1], 64
+        )
+        self.up3, self.c3 = nn.ConvTranspose2d(64, 32, 2, 2), DoubleConv(32 + ch[0], 32)
+        self.up4, self.up5, self.c4 = (
+            nn.ConvTranspose2d(32, 16, 2, 2),
+            nn.ConvTranspose2d(16, 16, 2, 2),
+            DoubleConv(16, 16),
+        )
+        self.out = nn.Conv2d(16, 1, 1)
+
+    def forward(self, f):
+        f1, f2, f3, bnet = f
+        x = self.c1(torch.cat([self.up1(self.bottleneck_conv(bnet)), f3], 1))
+        x = self.c2(torch.cat([self.up2(x), f2], 1))
+        x = self.c3(torch.cat([self.up3(x), f1], 1))
+        return self.out(self.c4(self.up5(self.up4(x))))
+
+
+class SiameseEfficientNetUNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.enc, self.dec = EfficientNetEncoder(False), UNetDecoder()
+
+    def forward(self, a, b):
+        fa, fb = self.enc(a), self.enc(b)
+        return self.dec([torch.abs(x - y) for x, y in zip(fa, fb)])
+
 
 # ==================== MODEL MANAGER ====================
 class ModelManager:
@@ -27,17 +192,17 @@ class ModelManager:
     def load_all_models(self):
         """Load all 3 models with their weights"""
         model_configs = {
-            "Siamese Pure (Thùy)": {
+            "Siamese Pure": {
                 "class": SiamesePure,
                 "raw_weights": "models/siamese_pure_raw.pth",
                 "processed_weights": "models/siamese_pure_processed.pth",
             },
-            "Siamese + MobileNetV2 (BiMi)": {
+            "Siamese + MobileNetV2": {
                 "class": SiameseMobileNetV2,
                 "raw_weights": "models/siamese_mobilenet_raw.pth",
                 "processed_weights": "models/siamese_mobilenet_processed.pth",
             },
-            "EfficientNet-B0 + U-Net (Chương)": {
+            "EfficientNet-B0 + U-Net": {
                 "class": SiameseEfficientNetUNet,
                 "raw_weights": "models/siamese_efficientnet_unet_raw.pth",
                 "processed_weights": "models/siamese_efficientnet_unet_processed.pth",
@@ -59,7 +224,7 @@ class ModelManager:
         except:
             # Default metrics nếu không có file
             self.metrics = {
-                "Siamese Pure (Thùy)": {
+                "Siamese Pure": {
                     "raw": {
                         "loss": 0.245,
                         "iou": 0.723,
@@ -75,7 +240,7 @@ class ModelManager:
                         "recall": 0.864,
                     },
                 },
-                "Siamese + MobileNetV2 (BiMi)": {
+                "Siamese + MobileNetV2": {
                     "raw": {
                         "loss": 0.221,
                         "iou": 0.756,
@@ -91,7 +256,7 @@ class ModelManager:
                         "recall": 0.883,
                     },
                 },
-                "EfficientNet-B0 + U-Net (Chương)": {
+                "EfficientNet-B0 + U-Net": {
                     "raw": {
                         "loss": 0.203,
                         "iou": 0.781,
@@ -155,8 +320,6 @@ def preprocess_image(image, target_size=(256, 256)):
 
 
 # ==================== INFERENCE ====================
-
-
 def detect_changes(
     image_before,
     image_after,
@@ -170,35 +333,32 @@ def detect_changes(
         return None, None, None, "⚠️ Vui lòng tải lên cả hai ảnh!"
 
     try:
-        # Get model
+        # 1. Lấy model và metrics
         model = model_manager.get_model(model_name, data_type)
         metrics = model_manager.get_metrics(model_name, data_type)
 
-        # Preprocess
+        # 2. Tiền xử lý
         img_a = preprocess_image(image_before).to(model_manager.device)
         img_b = preprocess_image(image_after).to(model_manager.device)
 
-        # Inference
+        # 3. Dự đoán (Inference)
         with torch.no_grad():
+            # Bước này thường gây lỗi cho model Chương/Thùy nếu kiến trúc forward không khớp
             output = model(img_a, img_b)
             prediction = torch.sigmoid(output)[0, 0].cpu().numpy()
 
-        # Apply threshold
+        # 4. Hậu xử lý (Apply threshold)
         binary_mask = (prediction > confidence_threshold).astype(np.uint8)
 
-        # Calculate statistics
+        # 5. Thống kê
         total_pixels = binary_mask.size
         changed_pixels = np.sum(binary_mask)
         change_percentage = (changed_pixels / total_pixels) * 100
 
-        # Visualizations
-        # 1. Change map (heatmap)
-        change_map = cv2.applyColorMap(
-            (prediction * 255).astype(np.uint8), cv2.COLORMAP_JET
-        )
+        # 6. Visualizations
+        change_map = cv2.applyColorMap((prediction * 255).astype(np.uint8), cv2.COLORMAP_JET)
         change_map = cv2.cvtColor(change_map, cv2.COLOR_BGR2RGB)
 
-        # 2. Overlay
         after_img_resized = cv2.resize(np.array(image_after), (256, 256))
         if len(after_img_resized.shape) == 2:
             after_img_resized = cv2.cvtColor(after_img_resized, cv2.COLOR_GRAY2RGB)
@@ -207,9 +367,8 @@ def detect_changes(
         overlay[binary_mask == 1] = [255, 0, 0]
         overlay = cv2.addWeighted(after_img_resized, 0.6, overlay, 0.4, 0)
 
-        # 3. Create metrics comparison plot
+        # 7. Vẽ biểu đồ
         metrics_plot = create_metrics_plot(model_name, data_type, metrics)
-
         # Statistics text
         stats_text = f"""
 ## 📊 Kết quả phát hiện thay đổi
@@ -244,8 +403,18 @@ def detect_changes(
         return change_map, overlay, metrics_plot, stats_text
 
     except Exception as e:
-        error_msg = f"❌ Lỗi trong quá trình xử lý: {str(e)}"
-        return None, None, None, error_msg
+        # ======================================================
+        # PHẦN QUAN TRỌNG: In chi tiết lỗi ra Terminal/Console
+        # ======================================================
+        print("\n" + "="*50)
+        print(f"❌ LỖI TẠI MODEL: {model_name}")
+        print(f"📂 LOẠI DỮ LIỆU: {data_type}")
+        print("-"*50)
+        traceback.print_exc() # In chi tiết dòng nào bị lỗi, lỗi gì
+        print("="*50 + "\n")
+        
+        error_details = traceback.format_exc().splitlines()[-1] # Lấy dòng thông báo lỗi cuối cùng
+        return None, None, None, f"❌ Lỗi hệ thống: {error_details}. Xem chi tiết trong Terminal."
 
 
 def get_model_size(model):
@@ -456,7 +625,7 @@ footer {
 }
 """
 
-with gr.Blocks(css=custom_css) as demo:
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
     # Header
     gr.HTML(
         """
@@ -466,7 +635,7 @@ with gr.Blocks(css=custom_css) as demo:
                 So sánh 3 kiến trúc Deep Learning: Siamese Pure | Siamese + MobileNetV2 | EfficientNet-B0 + U-Net
             </p>
             <p style="font-size: 0.9rem; margin-top: 0.5rem; opacity: 0.9;">
-                Đồ án cuối kì môn Xử lý ảnh số - Nhóm: Thùy 🔵 BiMi 🟢 Chương 🟣
+                Đồ án cuối kì môn Xử lý ảnh số 
             </p>
         </div>
     """
@@ -479,9 +648,9 @@ with gr.Blocks(css=custom_css) as demo:
         ## Cách sử dụng hệ thống
 
         ### 1️⃣ **Chọn Model**
-        - **Siamese Pure (Thùy):** CNN thuần túy, đơn giản nhưng hiệu quả
-        - **Siamese + MobileNetV2 (BiMi):** Kết hợp pre-trained MobileNetV2, cân bằng tốc độ/chất lượng
-        - **EfficientNet-B0 + U-Net (Chương):** Kiến trúc hiện đại nhất với U-Net skip connections
+        - **Siamese Pure:** CNN thuần túy, đơn giản nhưng hiệu quả
+        - **Siamese + MobileNetV2:** Kết hợp pre-trained MobileNetV2, cân bằng tốc độ/chất lượng
+        - **EfficientNet-B0 + U-Net:** Kiến trúc hiện đại nhất với U-Net skip connections
 
         ### 2️⃣ **Chọn loại dữ liệu**
         - **Raw:** Dữ liệu gốc từ LEVIR-CD+ (chưa xử lý)
@@ -503,11 +672,11 @@ with gr.Blocks(css=custom_css) as demo:
 
             model_selector = gr.Radio(
                 choices=[
-                    "Siamese Pure (Thùy)",
-                    "Siamese + MobileNetV2 (BiMi)",
-                    "EfficientNet-B0 + U-Net (Chương)",
+                    "Siamese Pure",
+                    "Siamese + MobileNetV2",
+                    "EfficientNet-B0 + U-Net",
                 ],
-                value="EfficientNet-B0 + U-Net (Chương)",
+                value="EfficientNet-B0 + U-Net",
                 label="🔧 Chọn Model Architecture",
                 info="Mỗi model có ưu/nhược điểm riêng",
             )
@@ -566,21 +735,21 @@ with gr.Blocks(css=custom_css) as demo:
                         "data/examples/img_A_01.png",
                         "data/examples/img_B_01.png",
                         0.5,
-                        "EfficientNet-B0 + U-Net (Chương)",
+                        "EfficientNet-B0 + U-Net",
                         "processed",
                     ],
                     [
                         "data/examples/img_A_02.png",
                         "data/examples/img_B_02.png",
                         0.4,
-                        "Siamese + MobileNetV2 (BiMi)",
+                        "Siamese + MobileNetV2",
                         "processed",
                     ],
                     [
                         "data/examples/img_A_03.png",
                         "data/examples/img_B_03.png",
                         0.6,
-                        "Siamese Pure (Thùy)",
+                        "Siamese Pure",
                         "processed",
                     ],
                 ],
@@ -593,7 +762,7 @@ with gr.Blocks(css=custom_css) as demo:
                 ],
                 label="📋 Ảnh mẫu (Click để thử)",
                 cache_examples=False,
-                fn=detect_changes,  # Cần chỉ định fn nếu dùng cache_examples
+                fn=detect_changes, 
                 outputs=[
                     output_change_map,
                     output_overlay,
@@ -625,7 +794,7 @@ with gr.Blocks(css=custom_css) as demo:
     with gr.Accordion("🔬 Chi tiết kiến trúc Models", open=False):
         gr.Markdown(
             """
-        ## 1️⃣ Siamese Pure (Thùy)
+        ## 1️⃣ Siamese Pure
 
         **Kiến trúc:**
         - Encoder: 4 khối Conv + BatchNorm + MaxPool
@@ -643,7 +812,7 @@ with gr.Blocks(css=custom_css) as demo:
 
         ---
 
-        ## 2️⃣ Siamese + MobileNetV2 (BiMi)
+        ## 2️⃣ Siamese + MobileNetV2
 
         **Kiến trúc:**
         - Encoder: MobileNetV2 pre-trained (ImageNet)
@@ -661,7 +830,7 @@ with gr.Blocks(css=custom_css) as demo:
 
         ---
 
-        ## 3️⃣ EfficientNet-B0 + U-Net (Chương)
+        ## 3️⃣ EfficientNet-B0 + U-Net
 
         **Kiến trúc:**
         - Encoder: EfficientNet-B0 (Compound Scaling)
@@ -885,12 +1054,11 @@ with gr.Blocks(css=custom_css) as demo:
         </footer>
     """
     )
-
 if __name__ == "__main__":
     demo.launch(
-        share=True,
         server_name="127.0.0.1",
         server_port=7860,
-        css=custom_css,
-        theme=gr.themes.Soft(),
+        share=False,
+        ssr_mode=False
     )
+
