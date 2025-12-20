@@ -8,28 +8,45 @@ from tqdm import tqdm
 
 def get_category(ratio):
     """
-    Phân loại mức độ thay đổi của ảnh thành 3 nhóm: Low, Medium, High dựa trên tỷ lệ pixel.
+    Phân loại mức độ thay đổi dựa trên tỷ lệ diện tích pixel (Low <= 25%, Medium 25-75%, High >= 75%).
     """
     if ratio >= 0.75: return "High"
     elif ratio > 0.25: return "Medium"
-    return "Low"
+    else: return "Low"
 
-def scan_and_build_metadata(root_dir):
+def scan_dataset(root_dirs):
     """
-    Quét thư mục dataset để tạo DataFrame chứa thông tin về đường dẫn, tỷ lệ thay đổi và nhóm phân loại.
+    Quét danh sách file từ các thư mục train/test hiện có và tính toán tỷ lệ thay đổi để tạo metadata.
     """
     data = []
-    label_dir = os.path.join(root_dir, 'label')
-    for filename in tqdm(os.listdir(label_dir)):
-        mask = cv2.imread(os.path.join(label_dir, filename), 0)
-        if mask is None: continue
-        ratio = np.count_nonzero(mask) / mask.size
-        data.append({'filename': filename, 'src': root_dir, 'cat': get_category(ratio)})
+    for root in root_dirs:
+        label_dir = os.path.join(root, 'label')
+        for fname in tqdm(os.listdir(label_dir), desc=f"Scanning {os.path.basename(root)}"):
+            mask = cv2.imread(os.path.join(label_dir, fname), 0)
+            if mask is None: continue
+            ratio = np.count_nonzero(mask) / mask.size
+            data.append({'filename': fname, 'src': root, 'cat': get_category(ratio)})
     return pd.DataFrame(data)
 
-def split_and_move(df, output_base, train_size=0.7, val_size=0.2, test_size=0.1):
+def redistribute_to_folders(df, split_name, base_output):
     """
-    Thực hiện Stratified Split dựa trên nhóm phân loại và di chuyển file vào các thư mục train/val/test tương ứng.
+    Thực hiện sao chép các tệp từ metadata vào cấu trúc thư mục train/val/test mới.
     """
-    # Logic sử dụng train_test_split và shutil.copy để chia lại dataset
-    pass
+    for sub in ['A', 'B', 'label']: os.makedirs(os.path.join(base_output, split_name, sub), exist_ok=True)
+    for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Moving to {split_name}"):
+        for sub in ['A', 'B', 'label']:
+            shutil.copy(os.path.join(row['src'], sub, row['filename']), os.path.join(base_output, split_name, sub, row['filename']))
+
+if __name__ == "__main__":
+    INPUT_DIRS = ['/kaggle/working/satellite_dataset/train', '/kaggle/working/satellite_dataset/test']
+    FINAL_OUTPUT = '/kaggle/working/satellite_full_dataset'
+    
+    df_all = scan_dataset(INPUT_DIRS)
+    
+    # Chia 70% Train, 30% Temp (để chia tiếp Val/Test)
+    train_df, temp_df = train_test_split(df_all, test_size=0.3, stratify=df_all['cat'], random_state=42)
+    # Chia Temp thành Val (20% tổng) và Test (10% tổng)
+    val_df, test_df = train_test_split(temp_df, test_size=1/3, stratify=temp_df['cat'], random_state=42)
+    
+    for df, name in zip([train_df, val_df, test_df], ['train', 'val', 'test']):
+        redistribute_to_folders(df, name, FINAL_OUTPUT)

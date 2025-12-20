@@ -6,26 +6,56 @@ from tqdm import tqdm
 
 def calculate_change_ratio(mask_path):
     """
-    Tính toán tỷ lệ phần trăm các pixel có sự thay đổi (giá trị > 0) trong ảnh mask.
+    Tính toán tỷ lệ diện tích thay đổi (pixel trắng) trên tổng diện tích của ảnh mask.
     """
     mask = cv2.imread(mask_path, 0)
-    if mask is None: return 0.0
-    return np.count_nonzero(mask) / mask.size
+    return np.count_nonzero(mask) / mask.size if mask is not None else 0
 
-def filter_dataset(src_dirs, dst_dirs, threshold=0.25, prefix="cdd_"):
+def process_filtering(config):
     """
-    Lọc các cặp ảnh từ dataset bổ sung dựa trên ngưỡng thay đổi và lưu vào thư mục đích với tiền tố mới.
+    Thực hiện lọc các cặp ảnh thỏa mãn ngưỡng thay đổi và sao chép sang thư mục đích với tên mới.
     """
-    for p in dst_dirs.values(): os.makedirs(p, exist_ok=True)
+    os.makedirs(config['dst_a'], exist_ok=True)
+    os.makedirs(config['dst_b'], exist_ok=True)
+    os.makedirs(config['dst_l'], exist_ok=True)
     
-    list_files = os.listdir(src_dirs['Label'])
+    files = [f for f in os.listdir(config['src_l']) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
     count = 0
-    for filename in tqdm(list_files):
-        ratio = calculate_change_ratio(os.path.join(src_dirs['Label'], filename))
-        if ratio >= threshold:
-            new_name = f"{prefix}{filename}"
-            shutil.copy(os.path.join(src_dirs['A'], filename), os.path.join(dst_dirs['A'], new_name))
-            shutil.copy(os.path.join(src_dirs['B'], filename), os.path.join(dst_dirs['B'], new_name))
-            shutil.copy(os.path.join(src_dirs['Label'], filename), os.path.join(dst_dirs['Label'], new_name))
+    
+    for fname in tqdm(files, desc=f"Filtering {config['name']}"):
+        ratio = calculate_change_ratio(os.path.join(config['src_l'], fname))
+        if ratio >= config['threshold']:
+            new_name = f"cdd_{fname}"
+            shutil.copy(os.path.join(config['src_a'], fname), os.path.join(config['dst_a'], new_name))
+            shutil.copy(os.path.join(config['src_b'], fname), os.path.join(config['dst_b'], new_name))
+            shutil.copy(os.path.join(config['src_l'], fname), os.path.join(config['dst_l'], new_name))
             count += 1
-    return count
+    print(f"✅ {config['name']}: Đã lấy {count} ảnh (Ngưỡng > {config['threshold']*100}%)")
+
+if __name__ == "__main__":
+    # Cấu hình lọc cho tập TRAIN (Ngưỡng cao để cân bằng)
+    train_config = {
+        'name': 'CDD_Train',
+        'threshold': 0.25,
+        'src_a': '/kaggle/input/cddchangedetection/subset/train/A',
+        'src_b': '/kaggle/input/cddchangedetection/subset/train/B',
+        'src_l': '/kaggle/input/cddchangedetection/subset/train/OUT',
+        'dst_a': '/kaggle/working/supplement_data/A',
+        'dst_b': '/kaggle/working/supplement_data/B',
+        'dst_l': '/kaggle/working/supplement_data/OUT'
+    }
+    
+    # Cấu hình lọc cho tập TEST (Ngưỡng thấp hơn để đánh giá đa dạng)
+    test_config = {
+        'name': 'CDD_Test',
+        'threshold': 0.05,
+        'src_a': '/kaggle/input/cddchangedetection/subset/test/A',
+        'src_b': '/kaggle/input/cddchangedetection/subset/test/B',
+        'src_l': '/kaggle/input/cddchangedetection/subset/test/OUT',
+        'dst_a': '/kaggle/working/cdd_test_filtered/A',
+        'dst_b': '/kaggle/working/cdd_test_filtered/B',
+        'dst_l': '/kaggle/working/cdd_test_filtered/label'
+    }
+    
+    process_filtering(train_config)
+    process_filtering(test_config)
