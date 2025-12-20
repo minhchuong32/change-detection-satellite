@@ -30,7 +30,7 @@ def process_filtering(config):
             shutil.copy(os.path.join(config['src_b'], fname), os.path.join(config['dst_b'], new_name))
             shutil.copy(os.path.join(config['src_l'], fname), os.path.join(config['dst_l'], new_name))
             count += 1
-    print(f"✅ {config['name']}: Đã lấy {count} ảnh (Ngưỡng > {config['threshold']*100}%)")
+    print(f"{config['name']}: Đã lấy {count} ảnh (Ngưỡng > {config['threshold']*100}%)")
 
 if __name__ == "__main__":
     # Cấu hình lọc cho tập TRAIN (Ngưỡng cao để cân bằng)

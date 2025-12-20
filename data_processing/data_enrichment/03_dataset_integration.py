@@ -18,7 +18,7 @@ def merge_split_data(split_name, levir_base, supp_base, final_base):
     """
     Hàm dùng chung để gộp dữ liệu từ nguồn LEVIR và Supplement (CDD) vào một thư mục đích cụ thể (train hoặc test).
     """
-    print(f"🚀 Đang gộp dữ liệu cho tập: {split_name.upper()}")
+    print(f"Đang gộp dữ liệu cho tập: {split_name.upper()}")
     dest_path = os.path.join(final_base, split_name)
     
     sources = [

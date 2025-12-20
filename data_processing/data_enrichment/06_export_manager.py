@@ -5,7 +5,7 @@ def archive_dataset(source_path, output_zip_name):
     """
     Nén toàn bộ thư mục dataset thành file .zip để tải xuống hoặc lưu trữ trên Kaggle Output.
     """
-    print(f"📦 Archiving {source_path}...")
+    print(f"Archiving {source_path}...")
     shutil.make_archive(output_zip_name, 'zip', source_path)
     return f"{output_zip_name}.zip"
 
