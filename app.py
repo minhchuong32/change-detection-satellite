@@ -1,6 +1,8 @@
 import gradio as gr
 import torch
 import torch.nn as nn
+import torchvision.models as models 
+from torchvision.models import MobileNet_V2_Weights
 import cv2
 import numpy as np
 from PIL import Image
@@ -9,9 +11,7 @@ import json
 import matplotlib.pyplot as plt
 import io
 import os
-import shutil
 import traceback
-
 
 # ==================== MODEL DEFINITIONS  ====================
 class DoubleConv(nn.Module):
@@ -88,47 +88,71 @@ class SiamesePure(nn.Module):
     def forward(self, a, b):
         fa, fb = self.enc(a), self.enc(b)
         return self.dec([torch.abs(x - y) for x, y in zip(fa, fb)])
-
-
-# --- SIAMESE MOBILENET (BIMI) ---
-class SiameseMobileNetV2(nn.Module):
+class ConvBlock(nn.Module):
+    def __init__(self, in_c, out_c):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_c, out_c, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_c, out_c, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(inplace=True)
+        )
+    def forward(self, x):
+        return self.conv(x)
+class SiameseUNetMobileNetV2(nn.Module):
     def __init__(self):
         super().__init__()
-        import torchvision.models as models
-
-        # Sửa lại để không bị lỗi Hub
-        base = models.mobilenet_v2(weights=None)
+        base = models.mobilenet_v2(weights=MobileNet_V2_Weights.DEFAULT)
         self.base_layers = base.features
+        
+        # Sửa lại các thông số in/out channels ở Decoder cho khớp với code train
         self.up1 = nn.ConvTranspose2d(1280, 96, 2, stride=2)
-        self.conv1 = ConvBlock(96 + 96, 96)
+        self.conv1 = ConvBlock(96 + 96, 96) 
+        
         self.up2 = nn.ConvTranspose2d(96, 32, 2, stride=2)
         self.conv2 = ConvBlock(32 + 32, 32)
+        
         self.up3 = nn.ConvTranspose2d(32, 24, 2, stride=2)
         self.conv3 = ConvBlock(24 + 24, 24)
+        
         self.up4 = nn.ConvTranspose2d(24, 16, 2, stride=2)
         self.conv4 = ConvBlock(16 + 16, 16)
+        
         self.final_up = nn.ConvTranspose2d(16, 16, 2, stride=2)
         self.final_conv = nn.Conv2d(16, 1, 1)
 
     def forward_one(self, x):
-        x1 = self.base_layers[:2](x)
-        x2 = self.base_layers[2:4](x1)
-        x3 = self.base_layers[4:7](x2)
-        x4 = self.base_layers[7:14](x3)
-        x5 = self.base_layers[14:](x4)
+        x1 = self.base_layers[:2](x)    
+        x2 = self.base_layers[2:4](x1)  
+        x3 = self.base_layers[4:7](x2)  
+        x4 = self.base_layers[7:14](x3) 
+        x5 = self.base_layers[14:](x4)  
         return [x1, x2, x3, x4, x5]
 
     def forward(self, imgA, imgB):
-        fA, fB = self.forward_one(imgA), self.forward_one(imgB)
-        d1, d2, d3, d4, d5 = [torch.abs(x - y) for x, y in zip(fA, fB)]
-        c1 = self.conv1(torch.cat([self.up1(d5), d4], dim=1))
-        c2 = self.conv2(torch.cat([self.up2(c1), d3], dim=1))
-        c3 = self.conv3(torch.cat([self.up3(c2), d2], dim=1))
-        c4 = self.conv4(torch.cat([self.up4(c3), d1], dim=1))
-        return self.final_conv(self.final_up(c4))
+        fA = self.forward_one(imgA)
+        fB = self.forward_one(imgB)
+        
+        # Core: Absolute Difference
+        d1 = torch.abs(fA[0] - fB[0]); d2 = torch.abs(fA[1] - fB[1])
+        d3 = torch.abs(fA[2] - fB[2]); d4 = torch.abs(fA[3] - fB[3])
+        d5 = torch.abs(fA[4] - fB[4])
+        
+        u1 = self.up1(d5)
+        c1 = self.conv1(torch.cat([u1, d4], dim=1))
+        u2 = self.up2(c1)
+        c2 = self.conv2(torch.cat([u2, d3], dim=1))
+        u3 = self.up3(c2)
+        c3 = self.conv3(torch.cat([u3, d2], dim=1))
+        u4 = self.up4(c3)
+        c4 = self.conv4(torch.cat([u4, d1], dim=1))
+        
+        out = self.final_up(c4)
+        return self.final_conv(out)
 
-
-# --- EFFICIENTNET UNET (CHƯƠNG) ---
+# --- EfficientNet Unet ---
 class EfficientNetEncoder(nn.Module):
     def __init__(self, pretrained=False):
         super().__init__()
@@ -198,7 +222,7 @@ class ModelManager:
                 "processed_weights": "models/siamese_pure_processed.pth",
             },
             "Siamese + MobileNetV2": {
-                "class": SiameseMobileNetV2,
+               "class": SiameseUNetMobileNetV2,
                 "raw_weights": "models/siamese_mobilenet_raw.pth",
                 "processed_weights": "models/siamese_mobilenet_processed.pth",
             },
@@ -275,15 +299,24 @@ class ModelManager:
             }
 
     def _load_model(self, model_class, weight_path):
-        """Load a single model"""
         model = model_class().to(self.device)
+        if not os.path.exists(weight_path):
+            print(f"⚠️ Warning: File {weight_path} not found. Model will use random weights.")
+            return model.eval()
+
         try:
-            model.load_state_dict(
-                torch.load(weight_path, map_location=self.device), strict=False
-            )
-            print(f"✅ Loaded {weight_path}")
+            state_dict = torch.load(weight_path, map_location=self.device)
+            # Fix lỗi nếu file pth lưu dưới dạng DataParallel (có chữ 'module.')
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                name = k[7:] if k.startswith('module.') else k
+                new_state_dict[name] = v
+                
+            model.load_state_dict(new_state_dict, strict=False)
+            print(f"✅ Loaded weights for {model_class.__name__} from {weight_path}")
         except Exception as e:
-            print(f"⚠️ Could not load {weight_path}: {e}")
+            print(f"❌ Error loading {weight_path}: {e}")
+        
         model.eval()
         return model
 
@@ -300,22 +333,29 @@ class ModelManager:
 model_manager = ModelManager()
 
 # ==================== PREPROCESSING ====================
-
-
+# ==================== PREPROCESSING ====================
 def preprocess_image(image, target_size=(256, 256)):
-    """Preprocess image for model input"""
     if isinstance(image, Image.Image):
         image = np.array(image)
 
+    # 1. Chuyển hệ màu
     if len(image.shape) == 2:
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
     elif image.shape[2] == 4:
         image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
 
+    # 2. Resize
     image = cv2.resize(image, target_size)
+    
+    # 3. Chuẩn hóa (Vô cùng quan trọng cho MobileNetV2)
     image = image.astype(np.float32) / 255.0
-    image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
-
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    image = (image - mean) / std
+    
+    # 4. Chuyển sang Tensor và ép kiểu .float() để tránh lỗi Double
+    image_tensor = torch.from_numpy(image).permute(2, 0, 1).float().unsqueeze(0)
+    
     return image_tensor
 
 
@@ -333,7 +373,6 @@ def detect_changes(
         return None, None, None, "⚠️ Vui lòng tải lên cả hai ảnh!"
 
     try:
-        # 1. Lấy model và metrics
         model = model_manager.get_model(model_name, data_type)
         metrics = model_manager.get_metrics(model_name, data_type)
 
@@ -403,17 +442,14 @@ def detect_changes(
         return change_map, overlay, metrics_plot, stats_text
 
     except Exception as e:
-        # ======================================================
-        # PHẦN QUAN TRỌNG: In chi tiết lỗi ra Terminal/Console
-        # ======================================================
         print("\n" + "="*50)
         print(f"❌ LỖI TẠI MODEL: {model_name}")
         print(f"📂 LOẠI DỮ LIỆU: {data_type}")
         print("-"*50)
-        traceback.print_exc() # In chi tiết dòng nào bị lỗi, lỗi gì
+        traceback.print_exc() 
         print("="*50 + "\n")
         
-        error_details = traceback.format_exc().splitlines()[-1] # Lấy dòng thông báo lỗi cuối cùng
+        error_details = traceback.format_exc().splitlines()[-1]
         return None, None, None, f"❌ Lỗi hệ thống: {error_details}. Xem chi tiết trong Terminal."
 
 
@@ -625,18 +661,12 @@ footer {
 }
 """
 
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
+with gr.Blocks() as demo:
     # Header
     gr.HTML(
         """
         <div class="header-text">
-            <h1>🛰️ SAR Change Detection - Multi-Model Comparison System</h1>
-            <p style="font-size: 1.1rem; margin-top: 0.5rem;">
-                So sánh 3 kiến trúc Deep Learning: Siamese Pure | Siamese + MobileNetV2 | EfficientNet-B0 + U-Net
-            </p>
-            <p style="font-size: 0.9rem; margin-top: 0.5rem; opacity: 0.9;">
-                Đồ án cuối kì môn Xử lý ảnh số 
-            </p>
+            <h1>🛰️ SAR Change Detection</h1>
         </div>
     """
     )
@@ -1056,9 +1086,8 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     )
 if __name__ == "__main__":
     demo.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        share=False,
-        ssr_mode=False
+        server_name="127.0.0.1", # Bắt buộc cho Hugging Face
+        server_port=7860,      # Cổng mặc định của Hugging Face
+        share=True,            # Tạo link public khi chạy máy cá nhân
+        theme=gr.themes.Soft() 
     )
-
